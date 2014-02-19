@@ -1,0 +1,1 @@
+Updated hs_fields to allow for different field types.
