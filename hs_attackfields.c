@@ -18,10 +18,16 @@ local Ihsfields *fields;
 
 /*********************************/
 
+/**
+ * Returns a random rotation.
+ */
 local int RandomRotation() {
     return prng->Number(0, 39);
 }
 
+/**
+ * Determines a rotation using xspeed and yspeed.
+ */
 local int DetermineRotation(int xspeed, int yspeed) {
     yspeed *= -1;
 
@@ -52,6 +58,9 @@ local int DetermineRotation(int xspeed, int yspeed) {
     return 0;
 }
 
+/**
+ * Fires the field weapon at the victim. Clears the fake player position to try to stay out of the way.
+ */
 local void FireWeapon(Player *victim, HSFieldInstance *inst) {
     unsigned status = STATUS_STEALTH | STATUS_CLOAK | STATUS_UFO;
     struct S2CWeapons packet = {
@@ -63,9 +72,9 @@ local void FireWeapon(Player *victim, HSFieldInstance *inst) {
     int *track = (int *)HashGetOne(&inst->type->properties, "track");
 
     if (track && *track)
-        packet.rotation = RandomRotation();
-    else
         packet.rotation = DetermineRotation(packet.xspeed, packet.yspeed);
+    else
+        packet.rotation = RandomRotation();
 
     inst->fake->position.x = packet.x;
     inst->fake->position.y = packet.y;
@@ -90,6 +99,9 @@ local void FireWeapon(Player *victim, HSFieldInstance *inst) {
     net->SendToOne(victim, (byte *)&packet, sizeof(struct S2CWeapons) - sizeof(struct ExtraPosData), NET_RELIABLE);
 }
 
+/**
+ * Parses the weapon to be used by the field type.
+ */
 local int ParseWeapon(const char *weapon, struct Weapons *wpn) {
     if (weapon) {
         if (strstr(weapon, "level2"))
@@ -139,6 +151,9 @@ local int ParseWeapon(const char *weapon, struct Weapons *wpn) {
 
 /*********************************/
 
+/**
+ * Class property loader called by each field type created of this class.
+ */
 local void AttackPropertyLoader(Arena *arena, const char *section, HashTable *properties) {
     const char *weapon = cfg->GetStr(arena->cfg, section, "weapon");
     struct Weapons *wpn = amalloc(sizeof(struct Weapons));
@@ -162,6 +177,9 @@ local void AttackPropertyLoader(Arena *arena, const char *section, HashTable *pr
     HashAdd(properties, "track", track);
 }
 
+/**
+ * Frees up memory used by the field type. Called when the field type is removed from the arena.
+ */
 local void AttackPropertyCleanup(Arena *arena, HashTable *properties) {
     struct Weapons *wpn = HashGetOne(properties, "weapon");
     int *track = HashGetOne(properties, "track");
@@ -173,11 +191,17 @@ local void AttackPropertyCleanup(Arena *arena, HashTable *properties) {
     afree(track);
 }
 
+/**
+ * Called when a field instance is created.
+ */
 local void AttackInstanceConstructor(HSFieldInstance *inst) {
     
 }
 
-local void AttackInstanceTimer(HSFieldInstance *inst) {
+/**
+ * Called when a field instance gets updated. Fires weapons at enemies.
+ */
+local void AttackInstanceUpdate(HSFieldInstance *inst) {
     Player *p;
     Link *link;
 
@@ -195,12 +219,18 @@ local void AttackInstanceTimer(HSFieldInstance *inst) {
     pd->Unlock();
 }
 
+/**
+ * Called when a field instance is destroyed.
+ */
 void AttackInstanceDestructor(HSFieldInstance *inst) {
     
 }
 
 /*******************************/
 
+/**
+ * Gets all the required interfaces.
+ */
 local int GetInterfaces(Imodman *mm_) {
     if (mm_ && !mm) {
         mm = mm_;
@@ -220,6 +250,9 @@ local int GetInterfaces(Imodman *mm_) {
     return 0;
 }
 
+/**
+ * Releases all of the used interfaces.
+ */
 local void ReleaseInterfaces() {
     if (mm) {
         mm->ReleaseInterface(lm);
@@ -238,7 +271,7 @@ HSFieldClass attack_class = {
     AttackPropertyLoader,
     AttackPropertyCleanup,
     AttackInstanceConstructor,
-    AttackInstanceTimer,
+    AttackInstanceUpdate,
     AttackInstanceDestructor
 };
 

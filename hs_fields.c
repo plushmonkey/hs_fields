@@ -28,17 +28,42 @@ typedef unsigned char u8;
 
 #define HSFIELD_NAME_SIZE 32
 
+/**
+ * Structure for the per-arena data.
+ */
 typedef struct HSFieldArenaData {
+    /**
+     * The list of field types that can be created in this arena.
+     */
     LinkedList fields;
+    
+    /**
+     * The list of field instances currently alive in this arena.
+     */
     LinkedList instances;
+    
+    /**
+     * The radius for each ship.
+     */
     int cfgShipRadius[8];
 } HSFieldArenaData;
 local int adkey;
 
+/**
+ * Structure for the per-player data
+ */
 typedef struct HSFieldPlayerData {
+    /**
+     * This is set if the player is currently dead.
+     */
     u8 dead     : 1;
+    
+    // padding
     u8 buffer   : 7;
 
+    /**
+     * The last time the player created a field instance.
+     */
     ticks_t lastField;
 } HSFieldPlayerData;
 local int pdkey;
@@ -60,6 +85,10 @@ local int GetFieldByName(LinkedList *fields, HSField *field, const void *name);
 local int GetFieldByPropertyValue(LinkedList *fields, HSField *field, const void *value);
 local int UpdateNextLVZId(LinkedList *fields, HSField *field, const void *array);
 local int UnloadFields(LinkedList *list, HSField *field, const void *arena);
+local int AddFieldClass(LinkedList *fields, HSField *field, const void *className);
+local int RemoveFieldClass(LinkedList *fields, HSField *field, const void *className);
+local int RemoveClassInstances(LinkedList *fields, HSField *field, const void *fClass);
+
 
 // Field instance iterate functions
 typedef int(HSFieldInstanceFunc)(LinkedList *list, HSFieldInstance *instance, const void *extra);
@@ -67,6 +96,7 @@ local HSFieldInstance *HSFieldInstanceIterate(LinkedList *, HSFieldInstanceFunc 
 
 local int GetOneInstanceFromPlayer(LinkedList *, HSFieldInstance *, const void *player);
 local int RemoveAllInstancesFromPlayer(LinkedList *, HSFieldInstance *, const void *player);
+local int RemoveAllInstancesOfType(LinkedList *, HSFieldInstance *, const void *type);
 
 // Other functions
 local void BeginFieldInstance(Arena *arena, Player *p, HSField *type);
@@ -87,6 +117,9 @@ local void UnregisterFieldClass(const char *className);
 
 /********************************/
 
+/**
+ * Call func on each field type until one of the func calls returns non-zero.
+ */
 local HSField *HSFieldIterate(LinkedList *list, HSFieldIterateFunc func, const void *extra) {
     HSField *result = NULL, *data = NULL;
     Link *link;
@@ -103,15 +136,24 @@ local HSField *HSFieldIterate(LinkedList *list, HSFieldIterateFunc func, const v
     return result;
 }
 
+/**
+ * A function to be used with HSFieldIterate. Returns the field that matches name.
+ */
 local int GetFieldByName(LinkedList *fields, HSField *field, const void *name) {
     return strcasecmp(field->name, (char *)name) == 0;
 }
 
+/**
+ * A function to be used with HSFieldIterate. Returns the field that matches the property value.
+ */
 local int GetFieldByPropertyValue(LinkedList *fields, HSField *field, const void *value) {
     int *pVal = (int *)value;
     return field->property == *pVal;
 }
 
+/**
+ * A function to be used with HSFieldIterate. Cycles through the object IDs for the field corners.
+ */
 local int UpdateNextLVZId(LinkedList *fields, HSField *field, const void *array) {
     int *LVZId = (int *)array;
     
@@ -125,13 +167,53 @@ local int UpdateNextLVZId(LinkedList *fields, HSField *field, const void *array)
     return 0;
 }
 
+/**
+ * A function to be used with HSFieldIterate. Frees up the memory used by each field type.
+ */
 local int UnloadFields(LinkedList *list, HSField *field, const void *arena) {
+    if (field && field->fieldClass && field->fieldClass->cleanup)
+        field->fieldClass->cleanup((Arena *)arena, &field->properties);
+    HashDeinit(&field->properties);
     afree(field);
+    return 0;
+}
+
+/** 
+ * A function to be used with HSFieldIterate. Adds the field class to the fields with that className.
+ */
+local int AddFieldClass(LinkedList *fields, HSField *field, const void *className) {
+    if (strcasecmp(field->className, (char *)className) == 0) {
+        HSFieldClass *fClass = HashGetOne(&g_fieldClasses, (char *)className);
+        field->fieldClass = fClass;
+    }
+    return 0;
+}
+
+/** 
+ * A function to be used with HSFieldIterate. Removes the field class from the fields with that className.
+ */
+local int RemoveFieldClass(LinkedList *fields, HSField *field, const void *className) {
+    if (strcasecmp(field->className, (char *)className) == 0)
+        field->fieldClass = NULL;
+    return 0;
+}
+
+/**
+ * A function to be used with HSFieldIterate. Removes all field instances that have a type with a specific class.
+ */
+local int RemoveClassInstances(LinkedList *fields, HSField *field, const void *fClass) {
+    if (field->fieldClass == fClass) {
+        HSFieldArenaData *adata = P_ARENA_DATA(field->arena, adkey);
+        HSFieldInstanceIterate(&adata->instances, RemoveAllInstancesOfType, field);
+    }
     return 0;
 }
 
 /********************************/
 
+/**
+ * Call func on each field instance until one of the func calls returns non-zero.
+ */
 local HSFieldInstance *HSFieldInstanceIterate(LinkedList *list, HSFieldInstanceFunc func, const void *extra) {
     HSFieldInstance *result = NULL, *data = NULL;
     Link *link;
@@ -148,10 +230,16 @@ local HSFieldInstance *HSFieldInstanceIterate(LinkedList *list, HSFieldInstanceF
     return result;
 }
 
+/**
+ * A function to be used with HSFieldInstanceIterate. Returns a field instance that the specific player created.
+ */
 local int GetOneInstanceFromPlayer(LinkedList *list, HSFieldInstance *instance, const void *player) {
     return instance->player == player;
 }
 
+/**
+ * A function to be used with HSFieldInstanceIterate. Removes all of the field instances created by a specific player.
+ */
 local int RemoveAllInstancesFromPlayer(LinkedList *list, HSFieldInstance *instance, const void *player) {
     if (player && (instance->player != player))
         return 0;
@@ -160,8 +248,20 @@ local int RemoveAllInstancesFromPlayer(LinkedList *list, HSFieldInstance *instan
     return 0;
 }
 
+/**
+ * A function to be used with HSFieldInstanceIterate. Removes all of the field instances of a specific type.
+ */
+local int RemoveAllInstancesOfType(LinkedList *list, HSFieldInstance *instance, const void *type) {
+    if (instance->type == type)
+        EndFieldInstance(instance->arena, instance);
+    return 0;
+}
+
 /********************************/
 
+/**
+ * Checks if a ship is in a square.
+ */
 int InSquare(Arena *arena, int ship, int sx, int sy, int r, int x, int y) {
     HSFieldArenaData *adata = P_ARENA_DATA(arena, adkey);
     
@@ -184,6 +284,11 @@ int InSquare(Arena *arena, int ship, int sx, int sy, int r, int x, int y) {
 
 /*******************************/
 
+/**
+ * Allocate a field type and setup all of the variables for it.
+ * Calls the field's class property loader.
+ * Adds the field to the list of usable field types for the arena.
+ */
 local int LoadField(Arena *arena, char *cfgname) {
     HSFieldArenaData *adata = P_ARENA_DATA(arena, adkey);
     HSField *field = amalloc(sizeof(HSField));
@@ -204,6 +309,7 @@ local int LoadField(Arena *arena, char *cfgname) {
     field->LVZIdBase[UpperRight]    = cfg->GetInt(arena->cfg, buffer, "lvzidbase-ur", 0);
     field->LVZIdBase[LowerRight]    = cfg->GetInt(arena->cfg, buffer, "lvzidbase-lr", 0);
     field->LVZIdBase[LowerLeft]     = cfg->GetInt(arena->cfg, buffer, "lvzidbase-ll", 0);
+    field->arena                    = arena;
 
     for (int i = 0; i < 4; i++)
         field->nextLVZId[i] = field->LVZIdBase[i];
@@ -235,18 +341,15 @@ local int LoadField(Arena *arena, char *cfgname) {
 
     // Get the field class from the hashtable
     HSFieldClass *fieldClass = HashGetOne(&g_fieldClasses, field->className);
-    if (!fieldClass) {
-        lm->LogA(L_ERROR, MODULE_NAME, arena, "Error loading %s field with class %s", cfgname, field->className);
-        afree(field);
-        return 0;
-    }
+    if (!fieldClass)
+        lm->LogA(L_WARN, MODULE_NAME, arena, "%s field's class %s is not loaded.", cfgname, field->className);
 
     field->fieldClass = fieldClass;
 
     // Call the property loader for the class
     HashInit(&field->properties);
 
-    if (field->fieldClass->loader)
+    if (field->fieldClass && field->fieldClass->loader)
         field->fieldClass->loader(arena, buffer, &field->properties);
 
     // Add the new field to arena field list
@@ -254,11 +357,14 @@ local int LoadField(Arena *arena, char *cfgname) {
     LLAdd(&adata->fields, field);
     pthread_mutex_unlock(&pthread_mutex);
 
-    lm->LogA(L_INFO, MODULE_NAME, arena, "Added field type %s", field->name);
+    lm->LogA(L_INFO, MODULE_NAME, arena, "Added field type %s (Type: %s)", field->name, field->fieldClass ? field->className : "NULL");
 
     return 1;
 }
 
+/**
+ * Loads all of the field types for the arena.
+ */
 local int LoadFields(Arena *arena) {
     const char *fieldsStr = cfg->GetStr(arena->cfg, "hs_field", "fields");
     const char *temp = 0;
@@ -272,6 +378,9 @@ local int LoadFields(Arena *arena) {
     return 1;
 }
 
+/**
+ * Timer used for updating a field instance. Calls the field's class update function.
+ */
 local int UpdateFieldInstance(void *param) {
     HSFieldInstance *inst = (HSFieldInstance *)param;
     if (!inst)
@@ -282,13 +391,17 @@ local int UpdateFieldInstance(void *param) {
         return 0;
     }
 
-    // Update instance timer in field class
-    if (inst->type && inst->type->fieldClass && inst->type->fieldClass->timer)
-        inst->type->fieldClass->timer(inst);
+    // Update instance using the field's class updater
+    if (inst->type && inst->type->fieldClass && inst->type->fieldClass->update)
+        inst->type->fieldClass->update(inst);
 
     return 1;
 }
 
+/**
+ * Allocates a field instance, and adds it to the list of field instances for the arena.
+ * Calls the field's class constructor. Starts the timer for updating the instance.
+ */
 local void BeginFieldInstance(Arena *arena, Player *p, HSField *type) {
     HSFieldArenaData *adata = P_ARENA_DATA(arena, adkey);
     HSFieldInstance *newInst = amalloc(sizeof(HSFieldInstance));
@@ -311,8 +424,6 @@ local void BeginFieldInstance(Arena *arena, Player *p, HSField *type) {
     newInst->endTime = current_ticks() + type->duration;
     newInst->x = p->position.x;
     newInst->y = p->position.y;
-
-    HashInit(&newInst->data);
 
     if (*type->event)
         items->triggerEvent(p, p->p_ship, type->event);
@@ -344,14 +455,18 @@ local void BeginFieldInstance(Arena *arena, Player *p, HSField *type) {
     LLAdd(&adata->instances, newInst);
 
     // Call instance constructor for field class
-    if (type->fieldClass && type->fieldClass->construct)
-        type->fieldClass->construct(newInst);
+    if (type->fieldClass && type->fieldClass->constructor)
+        type->fieldClass->constructor(newInst);
 
     pthread_mutex_unlock(&pthread_mutex);
 
     ml->SetTimer(UpdateFieldInstance, type->delay, type->delay, newInst, newInst);
 }
 
+/**
+ * Destroy a field instance by turning off the objects, clearing the update timer, and 
+ * calling the field's class destructor.
+ */
 local void EndFieldInstance(Arena *arena, HSFieldInstance *inst) {
     HSFieldArenaData *adata = P_ARENA_DATA(arena, adkey);
     short ids[4] = { inst->LVZIds[0], inst->LVZIds[1], inst->LVZIds[2], inst->LVZIds[3] };
@@ -375,13 +490,15 @@ local void EndFieldInstance(Arena *arena, HSFieldInstance *inst) {
     pthread_mutex_unlock(&pthread_mutex);
 
     // Call destructor in field class
-    if (inst->type && inst->type->fieldClass && inst->type->fieldClass->destruct)
-        inst->type->fieldClass->destruct(inst);
+    if (inst->type && inst->type->fieldClass && inst->type->fieldClass->destructor)
+        inst->type->fieldClass->destructor(inst);
 
-    HashDeinit(&inst->data);
     afree(inst);
 }
 
+/**
+ * Timer used to clear all field instances created by the dead player after they respawn.
+ */
 local int HandleRespawn(void *_p) {
     Player *p = (Player *)_p;
     HSFieldArenaData *adata = P_ARENA_DATA(p->arena, adkey);
@@ -398,12 +515,21 @@ local int HandleRespawn(void *_p) {
 
 /*******************************/
 
+/**
+ * Callback called when a player changes ships or frequencies.
+ * Removes all field instances created by the player.
+ */
 local void OnShipFreqChange(Player *p, int newShip, int oldShip, int newFreq, int oldFreq) {
     HSFieldArenaData *adata = P_ARENA_DATA(p->arena, adkey);
 
     HSFieldInstanceIterate(&adata->instances, RemoveAllInstancesFromPlayer, p);
 }
 
+/**
+ * Callback called when a player enters or leaves the arena.
+ * Sets up the per-player data when the player enters.
+ * Removes all field instances created by the player when they leave.
+ */
 local void OnPlayerAction(Player *p, int action, Arena *arena) {
     if ((p->type != T_VIE) && (p->type != T_CONT))
         return;
@@ -422,6 +548,10 @@ local void OnPlayerAction(Player *p, int action, Arena *arena) {
     }
 }
 
+/**
+ * Callback called when a player kills another player.
+ * Starts the timer to remove all of the field instances of the dead player.
+ */
 local void OnPlayerKill(Arena *arena, Player *killer, Player *killed, int bounty, int flags, int *pts, int *green) {
     int enterDelay = cfg->GetInt(killed->arena->cfg, "Kill", "EnterDelay", 0);
 
@@ -434,25 +564,48 @@ local void OnPlayerKill(Arena *arena, Player *killer, Player *killed, int bounty
 
 /*******************************/
 
+/**
+ * Registers a field class globally.
+ */
 local int RegisterFieldClass(const char *className, HSFieldClass *fieldClass) {
     lm->Log(L_INFO, "Registered field class %s", className);
 
     HashAdd(&g_fieldClasses, className, fieldClass);
+    
+    Link *link;
+    Arena *arena;
+    HSFieldArenaData *adata;
+    
+    aman->Lock();
+    FOR_EACH_ARENA_P(arena, adata, adkey) {
+        // Set all the classes for the fields with this class to NULL.
+        HSFieldIterate(&adata->fields, AddFieldClass, className);
+    }
+    aman->Unlock();
 
     return 1;
 }
 
+/**
+ * Unregisters the global field class.
+ */
 local void UnregisterFieldClass(const char *className) {
-    LinkedList *classes = HashGet(&g_fieldClasses, className);
-    if (!classes || LLCount(classes) == 0)
-        return;
+    HSFieldClass *fClass = HashGetOne(&g_fieldClasses, className);
+    if (!fClass) return;
 
-    // Remove all of the classes with the name className
-    HSFieldClass *fClass;
     Link *link;
-    FOR_EACH(classes, fClass, link)
-        HashRemove(&g_fieldClasses, className, fClass);
-    LLFree(classes);
+    Arena *arena;
+    HSFieldArenaData *adata;
+    
+    aman->Lock();
+    FOR_EACH_ARENA_P(arena, adata, adkey) {
+        HSFieldIterate(&adata->fields, RemoveClassInstances, fClass);
+        // Set all the classes for the fields with this class to NULL.
+        HSFieldIterate(&adata->fields, RemoveFieldClass, className);
+    }
+    aman->Unlock();
+    
+    HashRemove(&g_fieldClasses, className, fClass);
 }
 
 local Ihsfields fields_interface = {
@@ -468,12 +621,11 @@ local helptext_t field_help =
 "Targets: arena\n"
 "Syntax:\n"
 "  ?field [fieldtype]\n"
-"Spawns an attack field around your ship of the specified name.\n"
+"Spawns a field around your ship of the specified name.\n"
 "If you specify no name, ?field will pick a field you own.\n";
 local void Cfield(const char *cmd, const char *params, Player *p, const Target *target) {
     HSFieldArenaData *adata = P_ARENA_DATA(p->arena, adkey);
     HSFieldPlayerData *pdata = PPDATA(p, pdkey);
-    HSField *type = NULL;
 
     if (HS_IS_SPEC(p))
         return;
@@ -500,46 +652,48 @@ local void Cfield(const char *cmd, const char *params, Player *p, const Target *
         return;
     }
 
-    if (*params)
+    HSField *type = NULL;
+    
+    if (*params) {
         type = HSFieldIterate(&adata->fields, GetFieldByName, params);
-
-    if (type) {
-        if (items->getPropertySum(p, p->p_ship, "field", 0) & type->property) {
-            pdata->lastField = current_ticks();
-            BeginFieldInstance(p->arena, p, type);
-            chat->SendMessage(p, "%s Field Created.", type->name);
-        } else {
-            chat->SendMessage(p, "You do not have that type of field available.");
-            return;
-        }
-    } else if (!*params) {
+    } else {
         int sum = items->getPropertySum(p, p->p_ship, "field", 0);
         if (sum) {
             for (int i = 1; i <= sum; i *= 2) {
                 if (sum & i) {
                     int propertyVal = i;
                     type = HSFieldIterate(&adata->fields, GetFieldByPropertyValue, &propertyVal);
-                    if (type) {
-                        pdata->lastField = current_ticks();
-                        BeginFieldInstance(p->arena, p, type);
-                        chat->SendMessage(p, "%s field created.", type->name);
-                        return;
-                    }
+                    break;
                 }
             }
-            lm->LogP(L_ERROR, MODULE_NAME, p, "Somehow failed to get field even though the property value is non-zero!");
-        } else {
-            chat->SendMessage(p, "You don't have any fields!");
+        }
+    }
+    
+    if (type && type->fieldClass) {
+        if (items->getPropertySum(p, p->p_ship, "field", 0) & type->property) {
+            pdata->lastField = current_ticks();
+            BeginFieldInstance(p->arena, p, type);
+            chat->SendMessage(p, "%s field created.", type->name);
             return;
+        } else {
+            if (*params)
+                chat->SendMessage(p, "You do not have that type of field available.");
+            else
+                chat->SendMessage(p, "You don't have any fields!");
         }
     } else {
-        chat->SendMessage(p, "That type of field doesn't exist.");
-        return;
+        if (type)
+            chat->SendMessage(p, "You don't have any fields!");
+        else
+            chat->SendMessage(p, "That type of field doesn't exist.");
     }
 }
 
 /*******************************/
 
+/**
+ * Gets all the required interfaces.
+ */
 local int GetInterfaces(Imodman *mm_) {
     if (mm_ && !mm) {
         mm = mm_;
@@ -561,6 +715,9 @@ local int GetInterfaces(Imodman *mm_) {
     return 0;
 }
 
+/**
+ * Releases all of the used interfaces.
+ */
 local void ReleaseInterfaces() {
     if (mm) {
         mm->ReleaseInterface(chat);
@@ -657,7 +814,7 @@ EXPORT int MM_hs_fields(int action, Imodman *mm_, Arena *arena) {
             cmd->RemoveCommand("field", Cfield, arena);
 
             HSFieldInstanceIterate(&adata->instances, RemoveAllInstancesFromPlayer, 0);
-            HSFieldIterate(&adata->fields, UnloadFields, 0);
+            HSFieldIterate(&adata->fields, UnloadFields, arena);
 
             LLEmpty(&adata->instances);
             LLEmpty(&adata->fields);
